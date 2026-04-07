@@ -28,8 +28,8 @@ char pass[] = SECRET_PASS;
 
 int status = WL_IDLE_STATUS;      // the WiFi radio's status
 
-char hueHubIP[] = "REDACTED_HUE_IP";  // IP address of the HUE bridge
-String hueUserName = "REDACTED_HUE_USER"; // hue bridge username
+char hueHubIP[] = SECRET_HUE_IP;        // IP address of the HUE bridge
+String hueUserName = SECRET_HUE_USER;   // hue bridge username
 int hueValue = 0; // 0–65535
 
 // Make a WiFiClient instance and a HttpClient instance:
@@ -60,6 +60,9 @@ Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 //   NEO_RGB     Pixels are wired for RGB bitstream (v1 FLORA pixels, not v2)
 //   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
 
+// Ceiling Fan Switch
+const int fanSwitchPin = A0;
+
 void setup() {
   //Initialize serial and wait for port to open:
   Serial.begin(9600);
@@ -67,16 +70,17 @@ void setup() {
 
   // attempt to connect to WiFi network:
   while ( status != WL_CONNECTED) {
-    Serial.print("Attempting to connect to WPA SSID: ");
-    Serial.println(ssid);
-    // Connect to WPA/WPA2 network:
-    status = WiFi.begin(ssid, pass);
+    // Serial.print("Attempting to connect to WPA SSID: ");
+    // Serial.println(ssid);
+    status = WiFi.begin(ssid, pass); // Connect to WPA/WPA2 network
   }
 
   // you're connected now, so print out the data:
-  Serial.print("You're connected to the network IP = ");
+  // Serial.print("You're connected to the network IP = ");
   IPAddress ip = WiFi.localIP();
-  Serial.println(ip);
+  // Serial.println(ip);
+
+  pinMode(fanSwitchPin, INPUT_PULLDOWN);
 
   encoder.begin(); // Initialize encoder
 
@@ -87,6 +91,14 @@ void setup() {
 }
 
 void loop() {
+  // Fan Switch
+  int switchState = digitalRead(fanSwitchPin);
+  if (switchState == HIGH) {
+    Serial.println("Fan Switch pulled!");
+  } else {
+    Serial.println("Fan Switch not pulled.");
+  }
+
   // strip.clear(); // Set all pixel colors to 'off' // DELETE
   encoder.tick(); // if you're not using interrupts, you need this in the loop:
   int position = encoder.getPosition(); // read encoder position:
@@ -143,9 +155,9 @@ void sendRequest(int light, String cmd, String value) {
   hueCmd += value;
   hueCmd += "}";
   // see what you assembled to send:
-  Serial.print("PUT request to server: ");
-  Serial.println(request);
-  Serial.print("JSON command to server: ");
+  // Serial.print("PUT request to server: ");
+  // Serial.println(request);
+  // Serial.print("JSON command to server: ");
 
   // make the PUT request to the hub:
   httpClient.put(request, contentType, hueCmd);
@@ -154,10 +166,10 @@ void sendRequest(int light, String cmd, String value) {
   int statusCode = httpClient.responseStatusCode();
   String response = httpClient.responseBody();
 
-  Serial.println(hueCmd);
-  Serial.print("Status code from server: ");
-  Serial.println(statusCode);
-  Serial.print("Server response: ");
-  Serial.println(response);
-  Serial.println();
+  // Serial.println(hueCmd);
+  // Serial.print("Status code from server: ");
+  // Serial.println(statusCode);
+  // Serial.print("Server response: ");
+  // Serial.println(response);
+  // Serial.println();
 }
