@@ -30,8 +30,10 @@ int status = WL_IDLE_STATUS;      // the WiFi radio's status
 
 char hueHubIP[] = SECRET_HUE_IP;        // IP address of the HUE bridge
 String hueUserName = SECRET_HUE_USER;   // hue bridge username
-int hueValue = 0; // 0–65535
-int hueLight = 7;
+int hueValue = 0; // 0–65535 // overwritten by fetchLightState() in setup
+int hueLight = 4;
+  // Light strip = 4;
+  // South office most northern = 5;
 
 // Make a WiFiClient instance and a HttpClient instance:
 WiFiClient wifi;
@@ -48,7 +50,6 @@ int oldPosition = 0; // encoder previous position:
 #define LED_COUNT  8 // How many NeoPixels are attached to the Arduino?
 // NeoPixel brightness, 0 (min) to 255 (max)
 #define BRIGHTNESS 50 // Set BRIGHTNESS to about 1/5 (max = 255)
-#define DELAYVAL 500 // Time (in milliseconds) to pause between pixels
 
 // Declare our NeoPixel strip object:
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
@@ -96,6 +97,8 @@ void setup() {
   strip.begin();           // INITIALIZE NeoPixel strip object (REQUIRED)
   strip.show();            // Turn OFF all pixels ASAP
   strip.setBrightness(BRIGHTNESS);
+
+    fetchLightState(hueLight); // 🚨
 }
 
 void loop() {
@@ -114,7 +117,7 @@ void loop() {
  
   // if there's been a change, print it:
   if (position != oldPosition) {
-    hueValue += (position - oldPosition) * 1000;   // 1000 = sensitivity
+    hueValue += (position - oldPosition) * 10000;   // 1000 = sensitivity 🚨 increased
     hueValue = (hueValue + 65536) % 65536;         // wrap around color wheel
     oldPosition = position;
 
@@ -123,13 +126,23 @@ void loop() {
     Serial.println(position);
   }
 
+    // 🚨 NEW
+    // Sending request for get Hue values from API itself
+    static unsigned long lastHueSent = 0;
+    static int lastHueValue = -1;
+    if (hueValue != lastHueValue && millis() - lastHueSent > 150) {
+      sendRequest(hueLight, "hue", String(hueValue));
+      lastHueValue = hueValue;
+      lastHueSent = millis();
+    }
+
   // HUE
   // sendRequest(8, "on", "true");   // turn light number 8 on
   // delay(2000);                    // wait 2 seconds
   // sendRequest(8, "on", "false");  // turn light off
   // delay(2000);                    // wait 2 seconds
 
-  LEDStrip();
+  LEDStrip(hueValue); // 🚨 added hueValue
 
   int fsrRaw = analogRead(fsrPin);                  // 0–1023
   int bri = map(fsrRaw, 0, 1023, 254, 0);           // Hue bri range
@@ -139,7 +152,18 @@ void loop() {
   }
 }
 
-void LEDStrip(){
+void LEDStrip(int hueValue){
+    // 🚨
+    // static int displayedHue = 0;
+
+    // // Adjusting to rotary encoder's limitations for range
+    // int diff = hueValue - displayedHue;
+    // if (diff >  32768) diff -= 65536;
+    // if (diff < -32768) diff += 65536;
+    // int step = diff / 8;
+    // if (step == 0 && diff != 0) step = (diff > 0) ? 1 : -1;
+    // displayedHue = (displayedHue + step + 65536) % 65536;
+
   float lit = lightOn ? (lastBri / 254.0) * LED_COUNT : 0;
 
   if (lit < 0) lit = 0;                       // handles initial lastBri = -1
@@ -150,6 +174,7 @@ void LEDStrip(){
     if (frac < 0) frac = 0;
     uint8_t val = frac * 255;
     strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hueValue, 255, val)));
+      // HSV color range
   }
 
   // The first NeoPixel in a strand is #0, second is 1, all the way up
@@ -160,11 +185,8 @@ void LEDStrip(){
   //   // Here we're using a moderately bright green color:
   //   // strip.setPixelColor(i, strip.Color(0, 150, 0));
   //   strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hueValue)));
-
-    
-
-  //   // delay(DELAYVAL); // Pause before next pass through loop
   // }
+
   strip.show();   // Send the updated pixel colors to the hardware.
 }
 
@@ -202,10 +224,26 @@ void sendRequest(int light, String cmd, String value) {
   Serial.println();
 }
 
-bool getLightOn(int light) {
+  // 🚨 same as sendRequest NEW
+  bool getLightOn(int light) {
     String request = "/api/" + hueUserName + "/lights/" + light;
     httpClient.get(request);
     httpClient.responseStatusCode();          // must be called
     String response = httpClient.responseBody();
     return response.indexOf("\"on\":true") >= 0;
   }
+
+  // 🚨 same as sendRequest NEW
+  void fetchLightState(int light) {
+    httpClient.get("/api/" + hueUserName + "/lights/" + light);
+    httpClient.responseStatusCode();
+    String response = httpClient.responseBody();
+
+    lightOn = response.indexOf("\"on\":true") != -1;
+
+    int hueIdx = response.indexOf("\"hue\":");
+    if (hueIdx != -1) {
+      hueValue = response.substring(hueIdx + 6).toInt();
+    }
+  }
+
