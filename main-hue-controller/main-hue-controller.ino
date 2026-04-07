@@ -31,6 +31,7 @@ int status = WL_IDLE_STATUS;      // the WiFi radio's status
 char hueHubIP[] = SECRET_HUE_IP;        // IP address of the HUE bridge
 String hueUserName = SECRET_HUE_USER;   // hue bridge username
 int hueValue = 0; // 0–65535
+int hueLight = 7;
 
 // Make a WiFiClient instance and a HttpClient instance:
 WiFiClient wifi;
@@ -61,7 +62,14 @@ Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 //   NEO_RGBW    Pixels are wired for RGBW bitstream (NeoPixel RGBW products)
 
 // Ceiling Fan Switch
-const int fanSwitchPin = A0;
+const int fanSwitchPin = A7;
+int lastSwitchState = LOW;
+
+// FSR
+const int fsrPin = A0;
+int lastBri = -1;
+
+bool lightOn = true;
 
 void setup() {
   //Initialize serial and wait for port to open:
@@ -76,9 +84,9 @@ void setup() {
   }
 
   // you're connected now, so print out the data:
-  // Serial.print("You're connected to the network IP = ");
+  Serial.print("You're connected to the network IP = ");
   IPAddress ip = WiFi.localIP();
-  // Serial.println(ip);
+  Serial.println(ip);
 
   pinMode(fanSwitchPin, INPUT_PULLDOWN);
 
@@ -93,10 +101,11 @@ void setup() {
 void loop() {
   // Fan Switch
   int switchState = digitalRead(fanSwitchPin);
-  if (switchState == HIGH) {
-    Serial.println("Fan Switch pulled!");
-  } else {
-    Serial.println("Fan Switch not pulled.");
+  if (switchState != lastSwitchState) {
+    delay(20);                                  // crude debounce
+    lightOn = !getLightOn(hueLight);            // flip whatever the bridge currently says
+    sendRequest(hueLight, "on", lightOn ? "true" : "false");
+    lastSwitchState = switchState;
   }
 
   // strip.clear(); // Set all pixel colors to 'off' // DELETE
@@ -109,7 +118,7 @@ void loop() {
     hueValue = (hueValue + 65536) % 65536;         // wrap around color wheel
     oldPosition = position;
 
-    sendRequest(8, "hue", String(hueValue));       // light #6
+    sendRequest(hueLight, "hue", String(hueValue));
 
     Serial.println(position);
   }
@@ -121,22 +130,41 @@ void loop() {
   // delay(2000);                    // wait 2 seconds
 
   LEDStrip();
+
+  int fsrRaw = analogRead(fsrPin);                  // 0–1023
+  int bri = map(fsrRaw, 0, 1023, 254, 0);           // Hue bri range
+  if (abs(bri - lastBri) > 3) {                     // deadband: ignore jitter
+    sendRequest(hueLight, "bri", String(bri));
+    lastBri = bri;
+  }
 }
 
 void LEDStrip(){
+  float lit = lightOn ? (lastBri / 254.0) * LED_COUNT : 0;
+
+  if (lit < 0) lit = 0;                       // handles initial lastBri = -1
+
+  for (int i = 0; i < LED_COUNT; i++) {
+    float frac = lit - i;                     // >=1 full, <=0 off, between = partial
+    if (frac > 1) frac = 1;
+    if (frac < 0) frac = 0;
+    uint8_t val = frac * 255;
+    strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hueValue, 255, val)));
+  }
+
   // The first NeoPixel in a strand is #0, second is 1, all the way up
   // to the count of pixels minus one.
-  for(int i=0; i<LED_COUNT; i++) { // For each pixel...
+  // for(int i=0; i<LED_COUNT; i++) { // For each pixel...
 
-    // pixels.Color() takes RGB values, from 0,0,0 up to 255,255,255
-    // Here we're using a moderately bright green color:
-    // strip.setPixelColor(i, strip.Color(0, 150, 0));
-    strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hueValue)));
+  //   // pixels.Color() takes RGB values, from 0,0,0 up to 255,255,255
+  //   // Here we're using a moderately bright green color:
+  //   // strip.setPixelColor(i, strip.Color(0, 150, 0));
+  //   strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hueValue)));
 
     
 
-    // delay(DELAYVAL); // Pause before next pass through loop
-  }
+  //   // delay(DELAYVAL); // Pause before next pass through loop
+  // }
   strip.show();   // Send the updated pixel colors to the hardware.
 }
 
@@ -155,9 +183,9 @@ void sendRequest(int light, String cmd, String value) {
   hueCmd += value;
   hueCmd += "}";
   // see what you assembled to send:
-  // Serial.print("PUT request to server: ");
-  // Serial.println(request);
-  // Serial.print("JSON command to server: ");
+  Serial.print("PUT request to server: ");
+  Serial.println(request);
+  Serial.print("JSON command to server: ");
 
   // make the PUT request to the hub:
   httpClient.put(request, contentType, hueCmd);
@@ -166,10 +194,18 @@ void sendRequest(int light, String cmd, String value) {
   int statusCode = httpClient.responseStatusCode();
   String response = httpClient.responseBody();
 
-  // Serial.println(hueCmd);
-  // Serial.print("Status code from server: ");
-  // Serial.println(statusCode);
-  // Serial.print("Server response: ");
-  // Serial.println(response);
-  // Serial.println();
+  Serial.println(hueCmd);
+  Serial.print("Status code from server: ");
+  Serial.println(statusCode);
+  Serial.print("Server response: ");
+  Serial.println(response);
+  Serial.println();
 }
+
+bool getLightOn(int light) {
+    String request = "/api/" + hueUserName + "/lights/" + light;
+    httpClient.get(request);
+    httpClient.responseStatusCode();          // must be called
+    String response = httpClient.responseBody();
+    return response.indexOf("\"on\":true") >= 0;
+  }
