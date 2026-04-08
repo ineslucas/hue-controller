@@ -21,7 +21,6 @@
 #include <EncoderStepCounter.h>
 #include <Adafruit_NeoPixel.h>
 
-///////please enter your sensitive data in the Secret tab/arduino_secrets.h
 /////// WiFi Settings ///////
 char ssid[] = SECRET_SSID;
 char pass[] = SECRET_PASS;
@@ -46,12 +45,12 @@ EncoderStepCounter encoder(pin1, pin2); // Create encoder instance:
 int oldPosition = 0; // encoder previous position:
 
 // LED STRIP
-#define LED_PIN     6
-#define LED_COUNT  8 // How many NeoPixels are attached to the Arduino?
+#define LED_PIN    6
+#define LED_COUNT  8 // How many NeoPixels in the strip?
 // NeoPixel brightness, 0 (min) to 255 (max)
 #define BRIGHTNESS 50 // Set BRIGHTNESS to about 1/5 (max = 255)
 
-// Declare our NeoPixel strip object:
+// Declare NeoPixel strip object:
 Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
 // Argument 1 = Number of pixels in NeoPixel strip
 // Argument 2 = Arduino pin number (most are valid)
@@ -73,11 +72,10 @@ int lastBri = -1;
 bool lightOn = true;
 
 void setup() {
-  //Initialize serial and wait for port to open:
   Serial.begin(9600);
   while (!Serial); // wait for serial port to connect.
 
-  // attempt to connect to WiFi network:
+  // Attempt to connect to WiFi network:
   while ( status != WL_CONNECTED) {
     // Serial.print("Attempting to connect to WPA SSID: ");
     // Serial.println(ssid);
@@ -99,20 +97,24 @@ void setup() {
   strip.setBrightness(BRIGHTNESS);
 
     fetchLightState(hueLight); // 🚨
+    
+    sendPutRequest(hueLight, "sat", "254");
+    // tentative
 }
 
 void loop() {
   // Fan Switch
   int switchState = digitalRead(fanSwitchPin);
   if (switchState != lastSwitchState) {
-    delay(20);                                  // crude debounce
-    lightOn = !getLightOn(hueLight);            // flip whatever the bridge currently says
-    sendRequest(hueLight, "on", lightOn ? "true" : "false");
+    // delay(20); // crude debounce
+    fetchLightState(hueLight); // refresh lightOn from the bridge
+    lightOn = !lightOn; // Flip whatever the bridge currently says
+    sendPutRequest(hueLight, "on", lightOn ? "true" : "false");
     lastSwitchState = switchState;
   }
 
   // strip.clear(); // Set all pixel colors to 'off' // DELETE
-  encoder.tick(); // if you're not using interrupts, you need this in the loop:
+  encoder.tick(); // if you're not using interrupts, you need this in the loop;
   int position = encoder.getPosition(); // read encoder position:
  
   // if there's been a change, print it:
@@ -121,7 +123,7 @@ void loop() {
     hueValue = (hueValue + 65536) % 65536;         // wrap around color wheel
     oldPosition = position;
 
-    sendRequest(hueLight, "hue", String(hueValue));
+    sendPutRequest(hueLight, "hue", String(hueValue));
 
     Serial.println(position);
   }
@@ -131,23 +133,24 @@ void loop() {
     static unsigned long lastHueSent = 0;
     static int lastHueValue = -1;
     if (hueValue != lastHueValue && millis() - lastHueSent > 150) {
-      sendRequest(hueLight, "hue", String(hueValue));
+      sendPutRequest(hueLight, "hue", String(hueValue));
       lastHueValue = hueValue;
       lastHueSent = millis();
     }
 
   // HUE
-  // sendRequest(8, "on", "true");   // turn light number 8 on
+  // sendPutRequest(8, "on", "true");   // turn light number 8 on
   // delay(2000);                    // wait 2 seconds
-  // sendRequest(8, "on", "false");  // turn light off
+  // sendPutRequest(8, "on", "false");  // turn light off
   // delay(2000);                    // wait 2 seconds
 
   LEDStrip(hueValue); // 🚨 added hueValue
 
   int fsrRaw = analogRead(fsrPin);                  // 0–1023
   int bri = map(fsrRaw, 0, 1023, 254, 0);           // Hue bri range
+  // Only if there's a change, write to the bridge
   if (abs(bri - lastBri) > 3) {                     // deadband: ignore jitter
-    sendRequest(hueLight, "bri", String(bri));
+    sendPutRequest(hueLight, "bri", String(bri));
     lastBri = bri;
   }
 }
@@ -190,7 +193,8 @@ void LEDStrip(int hueValue){
   strip.show();   // Send the updated pixel colors to the hardware.
 }
 
-void sendRequest(int light, String cmd, String value) {
+// HTTP PUT to /api/<user>/lights/<n>/state/ with a JSON body, prints the response, and returns void
+void sendPutRequest(int light, String cmd, String value) {
   // make a String for the HTTP request path:
   String request = "/api/" + hueUserName;
   request += "/lights/";
@@ -224,26 +228,19 @@ void sendRequest(int light, String cmd, String value) {
   Serial.println();
 }
 
-  // 🚨 same as sendRequest NEW
-  bool getLightOn(int light) {
-    String request = "/api/" + hueUserName + "/lights/" + light;
-    httpClient.get(request);
-    httpClient.responseStatusCode();          // must be called
-    String response = httpClient.responseBody();
-    return response.indexOf("\"on\":true") >= 0;
+// GET + setting the global light on (fresh state)
+// Overwrites the global hueValue from thr brige response. 
+// If Bridge's hue differs from encoder, the next LEDStrip(hueValue) call will briefly reflect the bridges value instead of the encoders.
+void fetchLightState(int light) {
+  httpClient.get("/api/" + hueUserName + "/lights/" + light);
+  httpClient.responseStatusCode();
+  String response = httpClient.responseBody();
+
+  lightOn = response.indexOf("\"on\":true") != -1;
+
+  int hueIdx = response.indexOf("\"hue\":");
+  if (hueIdx != -1) {
+    hueValue = response.substring(hueIdx + 6).toInt();
   }
-
-  // 🚨 same as sendRequest NEW
-  void fetchLightState(int light) {
-    httpClient.get("/api/" + hueUserName + "/lights/" + light);
-    httpClient.responseStatusCode();
-    String response = httpClient.responseBody();
-
-    lightOn = response.indexOf("\"on\":true") != -1;
-
-    int hueIdx = response.indexOf("\"hue\":");
-    if (hueIdx != -1) {
-      hueValue = response.substring(hueIdx + 6).toInt();
-    }
-  }
+}
 
